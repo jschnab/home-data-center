@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+
+set -xe
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+# fill these variables before running this script
+SERVER_NAME=
+SYSTEMD_UNITS=
+APP_USERNAME=
+
+APP_NAME="hds-monitoring"
+APP_DIR="/etc/${APP_NAME}"
+CONFIG_FILE="${APP_NAME}.conf"
+DATA_DIR="/var/log/${APP_NAME}"
+SERVICE_NAME="${APP_NAME}.service"
+VENV_PATH="/home/${APP_USERNAME}/.venv"
+SYSTEMD_PATH="/etc/systemd/system"
+
+mkdir -p ${APP_DIR}
+cat << EOF > ${APP_DIR}/${CONFIG_FILE}
+[default]
+server_name = ${SERVER_NAME}
+systemd_units = ${SYSTEMD_UNITS}
+data_dir = ${DATA_DIR}
+EOF
+chown -R ${APP_USERNAME}: ${APP_DIR}
+
+mkdir -p ${DATA_DIR}
+chown -R ${APP_USERNAME}: ${DATA_DIR}
+
+cat << EOF > ${SYSTEMD_PATH}/${SERVICE_NAME}
+[Unit]
+Description=Server monitoring
+After=network.target
+
+[Service]
+User=${APP_USERNAME}
+Group=${APP_USERNAME}
+ExecStart=${VENV_PATH}/bin/${APP_NAME}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+mkdir -p ${SYSTEMD_PATH}/${SERVICE_NAME}.d
+
+cat << EOF > ${SYSTEMD_PATH}/${SERVICE_NAME}.d/override.conf
+[Service]
+Environment="HDS_MONITORING_APP_DIR=${APP_DIR}"
+Environment="HDS_MONITORING_CONFIG_FILE=${CONFIG_FILE}"
+EOF
+
+su - ${APP_USERNAME} << EOF
+python3 -m venv ${VENV_PATH}
+source ${VENV_PATH}/bin/activate
+pip3 install -U pip setuptools wheel
+cd ${HERE}
+python3 setup.py sdist
+pip install .
+EOF
+
+systemctl enable ${SERVICE_NAME}
+systemctl start ${SERVICE_NAME}
