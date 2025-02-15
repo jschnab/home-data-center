@@ -14,5 +14,5 @@ setup(
     version=VERSION,
     author=AUTHOR,
     license=LICENSE,
-    install_requires=["psutil"],
+    install_requires=["boto3", "psutil"],
 )
