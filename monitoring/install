@@ -4,31 +4,46 @@ set -xe
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-# fill these variables before running this script
+# Fill these variables before running this script.
 SERVER_NAME=
 SYSTEMD_UNITS=
 APP_USERNAME=
+S3_BUCKET_NAME=
 
 APP_NAME="hds-monitoring"
 APP_DIR="/etc/${APP_NAME}"
 CONFIG_FILE="${APP_NAME}.conf"
-DATA_DIR="/var/log/${APP_NAME}"
+DATA_DIR="${APP_DIR}/data"
+LOG_DIR="/var/log/${APP_NAME}"
+LOG_LEVEL="debug"
 SERVICE_NAME="${APP_NAME}.service"
 VENV_PATH="/home/${APP_USERNAME}/.venv"
 SYSTEMD_PATH="/etc/systemd/system"
+CRON_NAME="${APP_NAME}-s3-sync"
+DATA_S3_PATH="s3://${S3_BUCKET_NAME}/${SERVER_NAME}/"
 
+# Write the application configuration file.
 mkdir -p ${APP_DIR}
 cat << EOF > ${APP_DIR}/${CONFIG_FILE}
 [default]
 server_name = ${SERVER_NAME}
 systemd_units = ${SYSTEMD_UNITS}
 data_dir = ${DATA_DIR}
+log_dir = ${LOG_DIR}
+log_level = ${LOG_LEVEL}
+s3_bucket = ${S3_BUCKET_NAME}
 EOF
 chown -R ${APP_USERNAME}: ${APP_DIR}
 
+# Create directory to store application data.
 mkdir -p ${DATA_DIR}
 chown -R ${APP_USERNAME}: ${DATA_DIR}
 
+# Create logs directory.
+mkdir -p ${LOG_DIR}
+chown -R ${APP_USERNAME}: ${LOG_DIR}
+
+# Create the Systemd service that runs the application.
 cat << EOF > ${SYSTEMD_PATH}/${SERVICE_NAME}
 [Unit]
 Description=Server monitoring
@@ -53,6 +68,8 @@ Environment="HDS_MONITORING_APP_DIR=${APP_DIR}"
 Environment="HDS_MONITORING_CONFIG_FILE=${CONFIG_FILE}"
 EOF
 
+# Create the Python virtual environment for the application
+# and install the application.
 su - ${APP_USERNAME} << EOF
 python3 -m venv ${VENV_PATH}
 source ${VENV_PATH}/bin/activate
@@ -62,5 +79,6 @@ python3 setup.py sdist
 pip install .
 EOF
 
+# Start the application.
 systemctl enable ${SERVICE_NAME}
 systemctl start ${SERVICE_NAME}

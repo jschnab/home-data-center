@@ -1,21 +1,27 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from statistics import mean
 
 import psutil as psu
 
 from hds_monitoring import (
+    aws,
     config,
     io,
+    log,
     models,
     systemd,
 )
+
+LOGGER = log.get_logger(__name__)
 
 REPETITIONS = 5
 COLLECT_INTERVAL_SEC = 1
 SLEEP_SEC = 60
 
 DISK_PATH = "/"
+
+LAST_S3_SYNC_TS = None
 
 
 def get_load_avg_1_min():
@@ -103,11 +109,33 @@ def collect_metrics(interval=COLLECT_INTERVAL_SEC, rep=REPETITIONS):
     )
 
 
+def should_sync_to_s3():
+    global LAST_S3_SYNC_TS
+    LOGGER.debug(f"Last S3 sync: {LAST_S3_SYNC_TS}")
+    if LAST_S3_SYNC_TS is None:
+        ret = True
+    else:
+        ret = datetime.now() - LAST_S3_SYNC_TS > timedelta(minutes=5)
+    if ret:
+        LAST_S3_SYNC_TS = datetime.now()
+    LOGGER.debug(f"Should sync logs to S3: {ret}")
+    return ret
+
+
 def monitor(interval=SLEEP_SEC):
+    LOGGER.debug("Entering monitoring loop")
     while True:
         metrics = collect_metrics()
         io.metrics_to_csv(metrics)
         active_units = systemd.all_active_units(config.config["systemd_units"])
         for unit in active_units:
             io.services_to_csv(unit)
+        LOGGER.info("Finished logging metrics and service statuses")
+        if should_sync_to_s3():
+            aws.copy_folder_to_s3(
+                folder=config.config["data_dir"],
+                bucket=config.config["s3_bucket"],
+                key_prefix=config.config["server_name"],
+            )
+            LOGGER.info("Finished syncing logs to S3")
         time.sleep(interval)

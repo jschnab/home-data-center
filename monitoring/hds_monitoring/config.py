@@ -10,6 +10,9 @@ def parse_config(config):
         "server_name": default["server_name"],
         "systemd_units": units,
         "data_dir": default["data_dir"],
+        "log_dir": default["log_dir"],
+        "log_level": default["log_level"],
+        "s3_bucket": default["s3_bucket"],
     }
 
 
