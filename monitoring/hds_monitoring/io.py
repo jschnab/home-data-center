@@ -7,8 +7,14 @@ from hds_monitoring.config import config
 
 
 def to_csv(row, field_names, file_path):
+    if os.path.exists(file_path):
+        new_file = False
+    else:
+        new_file = True
     with open(file_path, "a") as fi:
         writer = csv.DictWriter(fi, fieldnames=field_names)
+        if new_file:
+            writer.writeheader()
         writer.writerow(row._asdict())
 
 
