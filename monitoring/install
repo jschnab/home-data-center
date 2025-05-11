@@ -5,6 +5,8 @@ set -xe
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 # Fill these variables before running this script.
+# TODO: read these values from environment variables to avoid errors when
+# pulling repository updates.
 SERVER_NAME=
 SYSTEMD_UNITS=
 APP_USERNAME=
