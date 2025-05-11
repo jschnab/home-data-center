@@ -5,7 +5,9 @@ from hds_monitoring import settings
 
 def parse_config(config):
     default = config["default"]
-    units = tuple(default["systemd_units"].split(","))
+    units = tuple(
+        unit for unit in default["systemd_units"].split(",") if unit != ""
+    )
     return {
         "server_name": default["server_name"],
         "systemd_units": units,

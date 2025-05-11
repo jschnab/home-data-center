@@ -138,4 +138,5 @@ def monitor(interval=SLEEP_SEC):
                 key_prefix=config.config["server_name"],
             )
             LOGGER.info("Finished syncing logs to S3")
+        io.cleanup_logs()
         time.sleep(interval)

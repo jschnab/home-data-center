@@ -1,6 +1,6 @@
 import csv
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from hds_monitoring import models, settings
 from hds_monitoring.config import config
@@ -36,8 +36,10 @@ def services_to_csv(row):
 
 def cleanup_logs():
     for path in os.listdir(config["data_dir"]):
-        full_path = os.path.join(settings.DATA_DIR, path)
-        last_modified_at = datetime.utcfromtimestamp(full_path)
-        now = datetime.now(tz=timezone.utc)
+        full_path = os.path.join(config["data_dir"], path)
+        last_modified_at = datetime.utcfromtimestamp(
+            os.path.getmtime(full_path)
+        )
+        now = datetime.now()
         if now - last_modified_at < timedelta(days=7):
             os.remove(full_path)
