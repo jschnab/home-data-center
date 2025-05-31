@@ -169,11 +169,13 @@ def update_service_status_table(server_name):
     for sname in server_names:
         dir_name = os.path.join(DATA_DIR, sname)
         log_paths.append(
-            [
-                os.path.join(dir_name, path)
-                for path in os.listdir(dir_name)
-                if "services" in path
-            ][0]
+            sorted(
+                [
+                    os.path.join(dir_name, path)
+                    for path in os.listdir(dir_name)
+                    if "services" in path
+                ]
+            )[-1]
         )
 
     last_statuses = defaultdict(dict)
@@ -185,6 +187,8 @@ def update_service_status_table(server_name):
             Data = namedtuple("Data", next(reader))
 
             for row in map(Data._make, reader):
+                if row.unit_name == "":
+                    continue
                 if row.server_name == server_name or server_name == "*":
                     timestamp = datetime.strptime(row.timestamp, TS_FORMAT)
                     if (
@@ -193,8 +197,8 @@ def update_service_status_table(server_name):
                         )
                     ) is not None:
                         if (
-                            datetime.strptime(last.timestamp, TS_FORMAT)
-                            < timestamp
+                            timestamp
+                            > datetime.strptime(last.timestamp, TS_FORMAT)
                         ):
                             last_statuses[row.server_name][row.unit_name] = row
                     else:
@@ -207,6 +211,7 @@ def update_service_status_table(server_name):
                     html.Th("Server Name"),
                     html.Th("Service Name"),
                     html.Th("Status"),
+                    html.Th("Updated At"),
                 ]
             )
         ]
@@ -218,6 +223,7 @@ def update_service_status_table(server_name):
                     html.Td(
                         "active" if row.active.lower() == "true" else "failed"
                     ),
+                    html.Td(row.timestamp)
                 ]
             )
             for server_name, service in last_statuses.items()
