@@ -54,6 +54,20 @@ def make_data_dirs(server_names: List[str]) -> None:
 def get_last_logs(
     server_names: List[str], s3_bucket: str = S3_BUCKET
 ) -> List[dict]:
+    """
+    Output is formatted as:
+    {
+        'server-1': {
+            'metrics': ('s3-key1', 's3-key2'),
+            'services': ('s3-key3', 's3-key4'),
+        },
+         'server-2': {
+            'metrics': ('s3-key5', 's3-key6'),
+            'services': ('s3-key7', 's3-key8'),
+        },
+        ...
+    }
+    """
     server_logs = {}
     for sname in server_names:
         metrics_keys = []
@@ -82,9 +96,17 @@ def get_last_logs(
                         ),
                     )
                 )
+        # Get the last two logs, to avoid relying on partial data for previous
+        # days.
         server_logs[sname] = {
-            "metrics": sorted(metrics_keys, key=lambda x: x[1])[-1][0],
-            "services": sorted(services_keys, key=lambda x: x[1])[-1][0],
+            "metrics": tuple(
+                item[0]
+                for item in sorted(metrics_keys, key=lambda x: x[1])[-2:]
+            ),
+            "services": tuple(
+                item[0]
+                for item in sorted(services_keys, key=lambda x: x[1])[-2:]
+            ),
         }
     return server_logs
 
@@ -96,31 +118,33 @@ def download_logs(logs: dict, s3_bucket=S3_BUCKET, data_dir=DATA_DIR) -> None:
     The parameter logs is a dictionary formatted as:
 
     {
-        "<server-name-1>: {
-            "metrics": "<metrics-logs-s3-key>",
-            "services": "<services-logs-s3-key>",
+        'server-1': {
+            'metrics': ('s3-key1', 's3-key2'),
+            'services': ('s3-key3', 's3-key4'),
+        },
+         'server-2': {
+            'metrics': ('s3-key5', 's3-key6'),
+            'services': ('s3-key7', 's3-key8'),
         },
         ...
-        "<server-name-n>: {
-            "metrics": "<metrics-logs-s3-key>",
-            "services": "<services-logs-s3-key>",
-        },
     }
 
     S3 keys are prefixed with the server name, so no need to join with the
     server name when building the local file path.
     """
     for server, logs in logs.items():
-        S3_CLIENT.download_file(
-            Bucket=s3_bucket,
-            Key=logs["metrics"],
-            Filename=os.path.join(data_dir, logs["metrics"]),
-        )
-        S3_CLIENT.download_file(
-            Bucket=s3_bucket,
-            Key=logs["services"],
-            Filename=os.path.join(data_dir, logs["services"]),
-        )
+        for metrics_log in logs["metrics"]:
+            S3_CLIENT.download_file(
+                Bucket=s3_bucket,
+                Key=metrics_log,
+                Filename=os.path.join(data_dir, metrics_log),
+            )
+        for services_log in logs["services"]:
+            S3_CLIENT.download_file(
+                Bucket=s3_bucket,
+                Key=services_log,
+                Filename=os.path.join(data_dir, services_log),
+            )
 
 
 def download_last_logs() -> None:
@@ -128,6 +152,62 @@ def download_last_logs() -> None:
     make_data_dirs(servers)
     last_logs = get_last_logs(servers)
     download_logs(last_logs)
+
+
+def read_metrics_from_local():
+    log_paths = []
+    for sname in get_server_names_from_local():
+        dir_name = os.path.join(DATA_DIR, sname)
+        log_paths.extend(
+            [
+                os.path.join(dir_name, path)
+                for path in os.listdir(dir_name)
+                if "metrics" in path
+            ]
+        )
+
+    dfs = []
+    for lpath in log_paths:
+        dfs.append(pd.read_csv(lpath))
+    concat_df = pd.concat(dfs)
+    concat_df["timestamp"] = pd.to_datetime(concat_df["timestamp"])
+
+    df = concat_df[
+        concat_df["timestamp"] >= datetime.now() - timedelta(days=2)
+    ]
+    df.sort_values(["server_name", "timestamp"], inplace=True)
+
+    df["ts_delta_seconds"] = (
+        df["timestamp"] - df["timestamp"].shift(1)
+    ).dt.total_seconds()
+
+    df["network_egress"] = (
+        df["network_bytes_sent"].diff() / df["ts_delta_seconds"] / 1000
+    ).mask(lambda x: x < 0, 0)
+
+    df["network_ingress"] = (
+        df["network_bytes_received"].diff() / df["ts_delta_seconds"] / 1000
+    ).mask(lambda x: x < 0, 0)
+
+    df["network_egress_errors"] = (
+        df["network_errors_sending"].diff().mask(lambda x: x < 0, 0)
+    )
+
+    df["network_ingress_errors"] = (
+        df["network_errors_receiving"].diff().mask(lambda x: x < 0, 0)
+    )
+
+    return df
+
+
+all_metrics = read_metrics_from_local()
+
+
+def filter_server_metrics(server_name):
+    if server_name == "*":
+        return all_metrics
+    else:
+        return all_metrics[all_metrics["server_name"] == server_name]
 
 
 def app_layout():
@@ -152,6 +232,14 @@ def app_layout():
         dcc.Graph(id="memory-used-percent"),
         html.H3("Disk Utilization (%)"),
         dcc.Graph(id="disk-used-percent"),
+        html.H3("Network egress (KB/s)"),
+        dcc.Graph(id="network-bytes-sent"),
+        html.H3("Network errors (egress)"),
+        dcc.Graph(id="network-errors-sending"),
+        html.H3("Network ingress (bytes)"),
+        dcc.Graph(id="network-bytes-received"),
+        html.H3("Network errors (ingress)"),
+        dcc.Graph(id="network-errors-receiving"),
     ]
 
 
@@ -196,9 +284,8 @@ def update_service_status_table(server_name):
                             row.unit_name
                         )
                     ) is not None:
-                        if (
-                            timestamp
-                            > datetime.strptime(last.timestamp, TS_FORMAT)
+                        if timestamp > datetime.strptime(
+                            last.timestamp, TS_FORMAT
                         ):
                             last_statuses[row.server_name][row.unit_name] = row
                     else:
@@ -223,7 +310,7 @@ def update_service_status_table(server_name):
                     html.Td(
                         "active" if row.active.lower() == "true" else "failed"
                     ),
-                    html.Td(row.timestamp)
+                    html.Td(row.timestamp),
                 ]
             )
             for server_name, service in last_statuses.items()
@@ -237,29 +324,11 @@ def update_service_status_table(server_name):
     Input(component_id="server-name-drop-down", component_property="value"),
 )
 def update_system_parameters_table(server_name):
-    if server_name == "*":
-        server_names = get_server_names_from_local()
-    else:
-        server_names = [server_name]
-
-    log_paths = []
-    for sname in server_names:
-        dir_name = os.path.join(DATA_DIR, sname)
-        log_paths.extend(
-            [
-                os.path.join(dir_name, path)
-                for path in os.listdir(dir_name)
-                if "metrics" in path
-            ]
-        )
-
-    dfs = []
-    for lpath in log_paths:
-        dfs.append(pd.read_csv(lpath))
-    concat_df = pd.concat(dfs)
-    concat_df["timestamp"] = pd.to_datetime(concat_df["timestamp"])
-
-    most_recent = concat_df.groupby("server_name").max("timestamp")
+    most_recent = (
+        filter_server_metrics(server_name)
+        .groupby("server_name")
+        .max("timestamp")
+    )
 
     return html.Table(
         [
@@ -295,41 +364,8 @@ def update_system_parameters_table(server_name):
     Input("server-name-drop-down", "value"),
 )
 def update_cpu_percent(server_name):
-    if server_name == "*":
-        server_names = get_server_names_from_local()
-    else:
-        server_names = [server_name]
-
-    log_paths = []
-    for sname in server_names:
-        dir_name = os.path.join(DATA_DIR, sname)
-        log_paths.extend(
-            [
-                os.path.join(dir_name, path)
-                for path in os.listdir(dir_name)
-                if "metrics" in path
-            ]
-        )
-
-    dfs = []
-    for lpath in log_paths:
-        dfs.append(pd.read_csv(lpath))
-    concat_df = pd.concat(dfs)
-    concat_df["timestamp"] = pd.to_datetime(concat_df["timestamp"])
-
-    ts_cut_df = concat_df[
-        concat_df["timestamp"] >= datetime.now() - timedelta(days=1)
-    ]
-
-    if server_name == "*":
-        final_df = ts_cut_df
-    else:
-        final_df = ts_cut_df[ts_cut_df["server_name"] == server_name]
-
-    final_df.sort_values(["server_name", "timestamp"], inplace=True)
-
     return px.line(
-        final_df,
+        filter_server_metrics(server_name),
         x="timestamp",
         y="cpu_percent",
         line_group="server_name",
@@ -342,41 +378,8 @@ def update_cpu_percent(server_name):
     Input("server-name-drop-down", "value"),
 )
 def update_memory_used_percent(server_name):
-    if server_name == "*":
-        server_names = get_server_names_from_local()
-    else:
-        server_names = [server_name]
-
-    log_paths = []
-    for sname in server_names:
-        dir_name = os.path.join(DATA_DIR, sname)
-        log_paths.extend(
-            [
-                os.path.join(dir_name, path)
-                for path in os.listdir(dir_name)
-                if "metrics" in path
-            ]
-        )
-
-    dfs = []
-    for lpath in log_paths:
-        dfs.append(pd.read_csv(lpath))
-    concat_df = pd.concat(dfs)
-    concat_df["timestamp"] = pd.to_datetime(concat_df["timestamp"])
-
-    ts_cut_df = concat_df[
-        concat_df["timestamp"] >= datetime.now() - timedelta(days=1)
-    ]
-
-    if server_name == "*":
-        final_df = ts_cut_df
-    else:
-        final_df = ts_cut_df[ts_cut_df["server_name"] == server_name]
-
-    final_df.sort_values(["server_name", "timestamp"], inplace=True)
-
     return px.line(
-        final_df,
+        filter_server_metrics(server_name),
         x="timestamp",
         y="memory_used_percent",
         line_group="server_name",
@@ -389,43 +392,66 @@ def update_memory_used_percent(server_name):
     Input("server-name-drop-down", "value"),
 )
 def update_disk_used_percent(server_name):
-    if server_name == "*":
-        server_names = get_server_names_from_local()
-    else:
-        server_names = [server_name]
-
-    log_paths = []
-    for sname in server_names:
-        dir_name = os.path.join(DATA_DIR, sname)
-        log_paths.extend(
-            [
-                os.path.join(dir_name, path)
-                for path in os.listdir(dir_name)
-                if "metrics" in path
-            ]
-        )
-
-    dfs = []
-    for lpath in log_paths:
-        dfs.append(pd.read_csv(lpath))
-    concat_df = pd.concat(dfs)
-    concat_df["timestamp"] = pd.to_datetime(concat_df["timestamp"])
-
-    ts_cut_df = concat_df[
-        concat_df["timestamp"] >= datetime.now() - timedelta(days=1)
-    ]
-
-    if server_name == "*":
-        final_df = ts_cut_df
-    else:
-        final_df = ts_cut_df[ts_cut_df["server_name"] == server_name]
-
-    final_df.sort_values(["server_name", "timestamp"], inplace=True)
-
     return px.line(
-        final_df,
+        filter_server_metrics(server_name),
         x="timestamp",
         y="disk_used_percent",
+        line_group="server_name",
+        color="server_name",
+    )
+
+
+@dash.callback(
+    Output("network-bytes-sent", "figure"),
+    Input("server-name-drop-down", "value"),
+)
+def update_network_bytes_sent(server_name):
+    return px.line(
+        filter_server_metrics(server_name),
+        x="timestamp",
+        y="network_egress",
+        line_group="server_name",
+        color="server_name",
+    )
+
+
+@dash.callback(
+    Output("network-bytes-received", "figure"),
+    Input("server-name-drop-down", "value"),
+)
+def update_network_bytes_received(server_name):
+    return px.line(
+        filter_server_metrics(server_name),
+        x="timestamp",
+        y="network_ingress",
+        line_group="server_name",
+        color="server_name",
+    )
+
+
+@dash.callback(
+    Output("network-errors-sending", "figure"),
+    Input("server-name-drop-down", "value"),
+)
+def update_network_errors_sending(server_name):
+    return px.line(
+        filter_server_metrics(server_name),
+        x="timestamp",
+        y="network_egress_errors",
+        line_group="server_name",
+        color="server_name",
+    )
+
+
+@dash.callback(
+    Output("network-errors-receiving", "figure"),
+    Input("server-name-drop-down", "value"),
+)
+def update_network_errors_receiving(server_name):
+    return px.line(
+        filter_server_metrics(server_name),
+        x="timestamp",
+        y="network_ingress_errors",
         line_group="server_name",
         color="server_name",
     )
