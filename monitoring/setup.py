@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 AUTHOR = "Jonathan Schnabel"
 LICENSE = "GNU General Public Licence v3.0"
 NAME = "hds-monitoring"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 setup(
     name=NAME,
