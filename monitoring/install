@@ -4,11 +4,14 @@ set -xe
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-# Set the following environment variables before running this script:
-# HOME_DATA_CENTER_SERVER_NAME
-# HOME_DATA_CENTER_SYSTEMD_UNITS
-# HOME_DATA_CENTER_APP_USERNAME
-# HOME_DATA_CENTER_S3_BUCKET_NAME
+# Set the following variables in the file /tmp/hds-monitoring-install.conf
+# before running this script:
+# export HOME_DATA_CENTER_SERVER_NAME=
+# export HOME_DATA_CENTER_SYSTEMD_UNITS=
+# export HOME_DATA_CENTER_APP_USERNAME=
+# export HOME_DATA_CENTER_S3_BUCKET_NAME=
+
+source /tmp/hds-monitoring-install.conf
 
 APP_NAME="hds-monitoring"
 APP_DIR="/etc/${APP_NAME}"
