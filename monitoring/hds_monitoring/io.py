@@ -41,5 +41,5 @@ def cleanup_logs():
             os.path.getmtime(full_path)
         )
         now = datetime.now()
-        if now - last_modified_at < timedelta(days=7):
+        if last_modified_at < now - timedelta(days=7):
             os.remove(full_path)
